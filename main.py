@@ -406,11 +406,20 @@ class Game:
                         pass  # Queue voll, überspringe diesen Frame
                 else:
                     car.update()
-                # Reifenspuren für KI/andere Autos bei Beschleunigung aus dem Stand
+                
+                # Reifenspuren für KI/andere Autos - erweitert
                 if prev_vel_ai < 0.5 and car.velocity >= 0.5:
                     if not hasattr(self, 'car_track_timers'):
                         self.car_track_timers = {}
                     self.car_track_timers[i] = now + TRACK_MARK_TIME
+                
+                # Reifenspuren bei Beschleunigung (auch während der Fahrt)
+                if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:  # 10% Beschleunigung
+                    if not hasattr(self, 'car_accel_timers'):
+                        self.car_accel_timers = {}
+                    self.car_accel_timers[i] = now + 0.3  # Kürzere Zeit für Beschleunigungsspuren
+                
+                # Zeichne Reifenspuren für verschiedene Situationen
                 if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
                     if car.velocity > 0:
                         # Sende Reifenspuren-Aufgabe an separaten Thread
@@ -421,6 +430,14 @@ class Game:
                     elif car.velocity < 0:
                         try:
                             self.tire_queue.put_nowait((car, 'brake'))
+                        except queue.Full:
+                            pass
+                
+                # Zusätzliche Reifenspuren bei Beschleunigung
+                if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
+                    if car.velocity > 0:
+                        try:
+                            self.tire_queue.put_nowait((car, 'accel'))
                         except queue.Full:
                             pass
             self.ball.update()
