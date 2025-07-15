@@ -1,6 +1,10 @@
 # MotoKick2000 🚗⚽
 
+> **🤖 KI-GENERIERTES SPIEL** - Dieses Spiel wurde vollständig mit KI-gestützter Entwicklung erstellt!
+
 Ein Rocket League-ähnliches Autosoccer-Spiel entwickelt mit **Python**, **Pygame** und **KI-gestützter Entwicklung**.
+
+![MotoKick2000 Menu](assets/menu_backround.png)
 
 ## 🎮 Über das Spiel
 
