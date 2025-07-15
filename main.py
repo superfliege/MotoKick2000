@@ -2,6 +2,8 @@ import pygame
 import sys
 import time
 import math
+import threading
+import queue
 from auto import Auto
 from ball import Ball
 from tiretrack import TireTrackManager
@@ -27,7 +29,7 @@ class Game:
         self.field = self.load_field()
         self.tiretracks = TireTrackManager()
         self.banden = Banden(self.WIDTH, self.HEIGHT, BANDEN_BREITE)
-        self.goals = GoalPosts(self.WIDTH, self.HEIGHT, 20, 120)
+        self.goals = GoalPosts(self.WIDTH, self.HEIGHT, 10, 130)
         self.ball = Ball(self.WIDTH//2, self.HEIGHT//2, self.WIDTH, self.HEIGHT)
         car_blue_img = pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height()))
         car_red_img = pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height()))
@@ -45,14 +47,188 @@ class Game:
         self.menu_selected = 0
         self.game_timer = 120  # 2 Minuten in Sekunden
         self.game_start_time = None
+        
+        # Multithreading-Setup
+        self.ai_queue = queue.Queue()
+        self.tire_queue = queue.Queue()
+        self.collision_queue = queue.Queue()
+        self.ai_thread = None
+        self.tire_thread = None
+        self.collision_thread = None
+        self.running = False
     def load_field(self):
         field = pygame.image.load("assets/field.png")
         return field
+
+    def ai_thread_worker(self):
+        """Separater Thread für KI-Berechnungen"""
+        while self.running:
+            try:
+                # Warte auf AI-Aufgaben
+                task = self.ai_queue.get(timeout=0.016)  # 60 FPS
+                if task is None:  # Stop-Signal
+                    break
+                    
+                car, ball, goals, teammates, opponents = task
+                if isinstance(car, CarAI):
+                    car.update_ai(ball, goals, teammates, opponents)
+                    
+                self.ai_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"AI Thread Error: {e}")
+                continue
+
+    def tire_thread_worker(self):
+        """Separater Thread für Reifenspuren-Berechnungen"""
+        while self.running:
+            try:
+                # Warte auf Reifenspuren-Aufgaben
+                task = self.tire_queue.get(timeout=0.016)  # 60 FPS
+                if task is None:  # Stop-Signal
+                    break
+                    
+                car, action = task
+                self.add_tire_tracks(car, action)
+                    
+                self.tire_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Tire Thread Error: {e}")
+                continue
+
+    def collision_thread_worker(self):
+        """Separater Thread für Kollisionserkennung"""
+        while self.running:
+            try:
+                # Warte auf Kollisions-Aufgaben
+                task = self.collision_queue.get(timeout=0.016)  # 60 FPS
+                if task is None:  # Stop-Signal
+                    break
+                    
+                cars, ball, goals = task
+                
+                # Auto-zu-Auto Kollisionen mit Arcade-Physik
+                for i, car1 in enumerate(cars):
+                    for j, car2 in enumerate(cars):
+                        if i >= j:
+                            continue
+                        # Nur schneller Bounding-Box-Check
+                        if car1.rect.colliderect(car2.rect):
+                            # Sanfte Arcade-Kollisionsphysik
+                            direction = pygame.Vector2(car1.rect.center) - pygame.Vector2(car2.rect.center)
+                            if direction.length() > 0:
+                                direction = direction.normalize()
+                                
+                                # Schiebe Autos nur leicht auseinander
+                                push_distance = 8
+                                car1.position += direction * push_distance
+                                car2.position -= direction * push_distance
+                                car1.rect.center = (int(car1.position.x), int(car1.position.y))
+                                car2.rect.center = (int(car2.position.x), int(car2.position.y))
+                                
+                                # Sanfte Arcade-Bounce: Leichte Geschwindigkeitsübertragung
+                                car1_vel = pygame.Vector2(math.cos(math.radians(car1.angle)), math.sin(math.radians(car1.angle))) * car1.velocity
+                                car2_vel = pygame.Vector2(math.cos(math.radians(car2.angle)), math.sin(math.radians(car2.angle))) * car2.velocity
+                                
+                                # Projektion der Geschwindigkeiten auf Kollisionsrichtung
+                                car1_speed_in_direction = car1_vel.dot(direction)
+                                car2_speed_in_direction = car2_vel.dot(direction)
+                                
+                                # Sanfte Bounce: Nur leichte Geschwindigkeitsübertragung
+                                transfer_factor = 0.3  # Nur 30% der Geschwindigkeit wird übertragen
+                                car1_speed_in_direction = car1_speed_in_direction * (1 - transfer_factor) + car2_speed_in_direction * transfer_factor
+                                car2_speed_in_direction = car2_speed_in_direction * (1 - transfer_factor) + car1_speed_in_direction * transfer_factor
+                                
+                                # Berechne neue Geschwindigkeitsvektoren
+                                car1_vel_perpendicular = car1_vel - direction * car1_vel.dot(direction)
+                                car2_vel_perpendicular = car2_vel - direction * car2_vel.dot(direction)
+                                
+                                car1_new_vel = car1_vel_perpendicular + direction * car1_speed_in_direction
+                                car2_new_vel = car2_vel_perpendicular + direction * car2_speed_in_direction
+                                
+                                # Wende neue Geschwindigkeiten an
+                                car1.velocity = car1_new_vel.length()
+                                car2.velocity = car2_new_vel.length()
+                                
+                                # Berechne neue Winkel (nur bei ausreichender Geschwindigkeit)
+                                if car1.velocity > 0.5:
+                                    car1.angle = math.degrees(math.atan2(car1_new_vel.y, car1_new_vel.x))
+                                if car2.velocity > 0.5:
+                                    car2.angle = math.degrees(math.atan2(car2_new_vel.y, car2_new_vel.x))
+                                
+                                # Sehr sanfte Geschwindigkeitsreduktion
+                                car1.velocity *= 0.95
+                                car2.velocity *= 0.95
+                
+                # Auto-zu-Pfosten Kollisionen
+                for car in cars:
+                    for post in goals.posts:
+                        car_center = pygame.Vector2(car.rect.center)
+                        dist = car_center.distance_to(post)
+                        min_dist = goals.post_radius + car.rect.width//2 * 0.7
+                        if dist < min_dist:
+                            direction = car_center - pygame.Vector2(post)
+                            if direction.length() == 0:
+                                direction = pygame.Vector2(1,0)
+                            direction = direction.normalize()
+                            overlap = min_dist - dist
+                            car.position += direction * overlap
+                            car.rect.center = (int(car.position.x), int(car.position.y))
+                            car.velocity *= -0.5
+                
+                # Ball-zu-Auto Kollisionen
+                for car in cars:
+                    ball_center = pygame.Vector2(ball.rect.center)
+                    closest = closest_point_on_rotated_rect(ball_center, car)
+                    dist = ball_center.distance_to(closest)
+                    if dist < BALL_RADIUS:
+                        direction = (ball_center - closest)
+                        if direction.length() == 0:
+                            direction = pygame.Vector2(1,0)
+                        direction = direction.normalize()
+                        overlap = BALL_RADIUS - dist
+                        ball.pos += direction * overlap
+                        ball.rect.center = (int(ball.pos.x), int(ball.pos.y))
+                        v_norm = ball.vel.dot(direction)
+                        if v_norm < 0:
+                            ball.vel = ball.vel - direction * v_norm * 2
+                        if car.velocity > 0:
+                            ball.vel += direction * abs(car.velocity) * 1.2
+                        else:
+                            ball.vel += direction * 3
+                        car.velocity *= 0.7
+                        max_ball_speed = 8 * (self.WIDTH / 256)
+                        if ball.vel.length() > max_ball_speed:
+                            ball.vel.scale_to_length(max_ball_speed)
+                
+                # Ball-zu-Pfosten Kollisionen
+                for post in goals.posts:
+                    dist = pygame.Vector2(ball.rect.center).distance_to(post)
+                    if dist < goals.post_radius + BALL_RADIUS:
+                        direction = pygame.Vector2(ball.rect.center) - pygame.Vector2(post)
+                        if direction.length() == 0:
+                            direction = pygame.Vector2(1,0)
+                        direction = direction.normalize()
+                        ball.vel = direction * ball.vel.length() * 0.8
+                        overlap = goals.post_radius + BALL_RADIUS - dist
+                        ball.pos += direction * overlap
+                        ball.rect.center = (int(ball.pos.x), int(ball.pos.y))
+                    
+                self.collision_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Collision Thread Error: {e}")
+                continue
+
     def add_tire_tracks(self, car, action):
         car_length = car.rect.height // 2
         car_width = car.rect.width // 2
         angle_rad = math.radians(car.angle)
-        offset_back = pygame.Vector2(-math.cos(angle_rad), -math.sin(angle_rad)) * (car_length * 0.7)
+        offset_back = pygame.Vector2(-math.cos(angle_rad), -math.sin(angle_rad)) * (car_length * 0.7) 
         offset_side = pygame.Vector2(-math.sin(angle_rad), math.cos(angle_rad)) * (car_width * 0.5)
         rear_left = car.position + offset_back + offset_side
         rear_right = car.position + offset_back - offset_side
@@ -108,6 +284,16 @@ class Game:
         # Timer starten
         self.game_start_time = time.time()
         self.game_timer = 120  # Reset timer
+        
+        # Threads starten
+        self.running = True
+        self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
+        self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
+        self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
+        self.ai_thread.start()
+        self.tire_thread.start()
+        self.collision_thread.start()
+        
         car_imgs = [
             pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
             pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
@@ -162,6 +348,17 @@ class Game:
             if remaining_time <= 0:
                 # Spielende - zeige finalen Spielstand
                 self.show_final_score()
+                # Threads stoppen
+                self.running = False
+                self.ai_queue.put(None)  # Stop-Signal
+                self.tire_queue.put(None)  # Stop-Signal
+                self.collision_queue.put(None) # Stop-Signal
+                if self.ai_thread:
+                    self.ai_thread.join(timeout=1.0)
+                if self.tire_thread:
+                    self.tire_thread.join(timeout=1.0)
+                if self.collision_thread:
+                    self.collision_thread.join(timeout=1.0)
                 return  # Zurück zum Menü
             # Steuerung für Spieler (immer erstes Auto)
             player_car = self.cars[0]
@@ -185,18 +382,28 @@ class Game:
                 player_car.drift()
             if self.car_red_track_timer > now:
                 if keys[pygame.K_w]:
-                    self.add_tire_tracks(player_car, 'gas')
+                    try:
+                        self.tire_queue.put_nowait((player_car, 'gas'))
+                    except queue.Full:
+                        pass
                 if keys[pygame.K_s]:
-                    self.add_tire_tracks(player_car, 'brake')
+                    try:
+                        self.tire_queue.put_nowait((player_car, 'brake'))
+                    except queue.Full:
+                        pass
             # Spielerauto updaten (Bewegung)
             player_car.update()
-            # KI-Logik für alle CarAI
+            # KI-Logik für alle CarAI - jetzt über Thread
             for i, car in enumerate(self.cars[1:], start=1):
                 prev_vel_ai = car.velocity
                 if isinstance(car, CarAI):
                     teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
                     opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                    car.update_ai(self.ball, self.goals, teammates, opponents)
+                    # Sende AI-Aufgabe an separaten Thread
+                    try:
+                        self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
+                    except queue.Full:
+                        pass  # Queue voll, überspringe diesen Frame
                 else:
                     car.update()
                 # Reifenspuren für KI/andere Autos bei Beschleunigung aus dem Stand
@@ -206,103 +413,26 @@ class Game:
                     self.car_track_timers[i] = now + TRACK_MARK_TIME
                 if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
                     if car.velocity > 0:
-                        self.add_tire_tracks(car, 'gas')
+                        # Sende Reifenspuren-Aufgabe an separaten Thread
+                        try:
+                            self.tire_queue.put_nowait((car, 'gas'))
+                        except queue.Full:
+                            pass
                     elif car.velocity < 0:
-                        self.add_tire_tracks(car, 'brake')
+                        try:
+                            self.tire_queue.put_nowait((car, 'brake'))
+                        except queue.Full:
+                            pass
             self.ball.update()
-            # Kollisionen für alle Autos
-            for i, car1 in enumerate(self.cars):
-                car1_center = car1.rect.center
-                car1_pos = car1.position
-                car1_rect = car1.rect
-                for j, car2 in enumerate(self.cars):
-                    if i >= j:
-                        continue
-                    # Schneller Bounding-Box-Check
-                    if not car1_rect.colliderect(car2.rect):
-                        continue
-                    car2_center = car2.rect.center
-                    car2_pos = car2.position
-                    car_dist = pygame.Vector2(car1_center).distance_to(car2_center)
-                    min_dist = (car1_rect.width + car2.rect.width) // 2 * 0.7
-                    if car_dist < min_dist:
-                        direction = pygame.Vector2(car1_center) - pygame.Vector2(car2_center)
-                        if direction.length() == 0:
-                            direction = pygame.Vector2(1,0)
-                        direction = direction.normalize()
-                        overlap = min_dist - car_dist
-                        # Bounce: Schiebe Autos auseinander
-                        car1_pos += direction * (overlap/2)
-                        car2_pos -= direction * (overlap/2)
-                        car1_rect.center = (int(car1_pos.x), int(car1_pos.y))
-                        car2.rect.center = (int(car2_pos.x), int(car2_pos.y))
-                        # Richtungsabhängiger Velocity-Impuls (Vektor-Bounce)
-                        bounce_strength = 0.4
-                        min_bounce = 0.2
-                        # Impuls für car1 (weg von car2)
-                        car1_vec = pygame.Vector2(math.cos(math.radians(car1.angle)), math.sin(math.radians(car1.angle)))
-                        car1_bounce = direction * max(abs(car1.velocity), min_bounce) * bounce_strength
-                        car1_vec = car1_vec.lerp(car1_bounce.normalize(), 0.9)
-                        car1.velocity = car1_vec.length()
-                        # car1.angle bleibt unverändert
-                        # Impuls für car2 (weg von car1)
-                        car2_vec = pygame.Vector2(math.cos(math.radians(car2.angle)), math.sin(math.radians(car2.angle)))
-                        car2_bounce = -direction * max(abs(car2.velocity), min_bounce) * bounce_strength
-                        car2_vec = car2_vec.lerp(car2_bounce.normalize(), 0.9)
-                        car2.velocity = car2_vec.length()
-                        # car2.angle bleibt unverändert
-            # Kollision Auto mit Pfosten
-            for car in self.cars:
-                for post in self.goals.posts:
-                    car_center = pygame.Vector2(car.rect.center)
-                    dist = car_center.distance_to(post)
-                    min_dist = self.goals.post_radius + car.rect.width//2 * 0.7
-                    if dist < min_dist:
-                        direction = car_center - pygame.Vector2(post)
-                        if direction.length() == 0:
-                            direction = pygame.Vector2(1,0)
-                        direction = direction.normalize()
-                        overlap = min_dist - dist
-                        car.position += direction * overlap
-                        car.rect.center = (int(car.position.x), int(car.position.y))
-                        car.velocity *= -0.5
-            # Ball-Auto-Kollision
-            for car in self.cars:
-                ball_center = pygame.Vector2(self.ball.rect.center)
-                closest = closest_point_on_rotated_rect(ball_center, car)
-                dist = ball_center.distance_to(closest)
-                if dist < BALL_RADIUS:
-                    direction = (ball_center - closest)
-                    if direction.length() == 0:
-                        direction = pygame.Vector2(1,0)
-                    direction = direction.normalize()
-                    overlap = BALL_RADIUS - dist
-                    self.ball.pos += direction * overlap
-                    self.ball.rect.center = (int(self.ball.pos.x), int(self.ball.pos.y))
-                    v_norm = self.ball.vel.dot(direction)
-                    if v_norm < 0:
-                        self.ball.vel = self.ball.vel - direction * v_norm * 2
-                    if car.velocity > 0:
-                        self.ball.vel += direction * abs(car.velocity) * 1.2
-                    else:
-                        self.ball.vel += direction * 3
-                    car.velocity *= 0.7
-                    max_ball_speed = 8 * (self.WIDTH / 256)
-                    if self.ball.vel.length() > max_ball_speed:
-                        self.ball.vel.scale_to_length(max_ball_speed)
-            # Ball-Pfosten-Kollision
-            for post in self.goals.posts:
-                dist = pygame.Vector2(self.ball.rect.center).distance_to(post)
-                if dist < self.goals.post_radius + BALL_RADIUS:
-                    direction = pygame.Vector2(self.ball.rect.center) - pygame.Vector2(post)
-                    if direction.length() == 0:
-                        direction = pygame.Vector2(1,0)
-                    direction = direction.normalize()
-                    self.ball.vel = direction * self.ball.vel.length() * 0.8
-                    overlap = self.goals.post_radius + BALL_RADIUS - dist
-                    self.ball.pos += direction * overlap
-                    self.ball.rect.center = (int(self.ball.pos.x), int(self.ball.pos.y))
-            # Tore prüfen
+            # Kollisionen für alle Autos - vereinfacht und performanter
+            # Die Kollisionen werden jetzt in einem separaten Thread behandelt
+            # Hier nur die Aufgaben an den Threads geben
+            try:
+                self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
+            except queue.Full:
+                pass
+            
+            # Tore prüfen (bleibt im Hauptthread)
             y1 = self.goals.y1
             y2 = self.goals.y2
             if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
@@ -311,6 +441,7 @@ class Game:
             if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
                 self.score_blue += 1
                 self.reset_ball()
+                
             self.draw(remaining_time)
             self.clock.tick(60)
     def draw(self, remaining_time):
@@ -325,12 +456,24 @@ class Game:
             car.draw(self.screen)
         score_text = self.font.render(f"{self.score_blue} : {self.score_red}", True, (255,255,255))
         self.screen.blit(score_text, (self.WIDTH//2-score_text.get_width()//2, int(20)))
-        # Countdown oben rechts
-        minutes = int(remaining_time) // 60
-        seconds = int(remaining_time) % 60
-        countdown_text = self.font.render(f"{minutes:02d}:{seconds:02d}", True, (255, 255, 255))
-        countdown_rect = countdown_text.get_rect(topright=(self.WIDTH - 20, 20))
-        self.screen.blit(countdown_text, countdown_rect)
+        # Countdown-Anzeige
+        if remaining_time > 10:
+            minutes = int(remaining_time) // 60
+            seconds = int(remaining_time) % 60
+            countdown_text = self.font.render(f"{minutes:02d}:{seconds:02d}", True, (255, 255, 255))
+            countdown_rect = countdown_text.get_rect(topright=(self.WIDTH - 20, 20))
+            self.screen.blit(countdown_text, countdown_rect)
+        else:
+            # Großer, halbtransparenter, roter Timer mittig oben
+            big_font = pygame.font.SysFont("Arial", 120, bold=True)
+            seconds = int(remaining_time)
+            big_timer_text = big_font.render(f"{seconds}", True, (255, 0, 0))
+            # Transparenter Hintergrundbalken
+            overlay = pygame.Surface((self.WIDTH, 160), pygame.SRCALPHA)
+            overlay.fill((255, 0, 0, 80))  # Rot, halbtransparent
+            self.screen.blit(overlay, (0, 0))
+            timer_rect = big_timer_text.get_rect(midtop=(self.WIDTH//2, 10))
+            self.screen.blit(big_timer_text, timer_rect)
         pygame.display.flip()
 
     def show_final_score(self):
@@ -386,7 +529,5 @@ def closest_point_on_rotated_rect(ball_center, car):
     world_y = -clamped_x * sin_a + clamped_y * cos_a + car.position.y
     return pygame.Vector2(world_x, world_y)
 
-if __name__ == "__main__":
-    Game().run() 
 if __name__ == "__main__":
     Game().run() 

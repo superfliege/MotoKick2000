@@ -7,11 +7,12 @@ class GoalPosts:
         self.center = height // 2
         self.y1 = self.center - gap // 2
         self.y2 = self.center + gap // 2
-        self.left1 = (0, self.y1)
-        self.left2 = (0, self.y2)
-        self.right1 = (width, self.y1)
-        self.right2 = (width, self.y2)
+        # Pfosten weiter auseinander und noch kleiner, 20 Pixel vom Rand
+        self.left1 = (20, self.y1)
+        self.left2 = (20, self.y2)
+        self.right1 = (width - 20, self.y1)
+        self.right2 = (width - 20, self.y2)
         self.posts = [self.left1, self.left2, self.right1, self.right2]
     def draw(self, surface):
         for post in self.posts:
-            pygame.draw.circle(surface, (0,0,0), post, self.post_radius) 
+            pygame.draw.circle(surface, (255,255,255), post, self.post_radius) 
