@@ -6,6 +6,8 @@ Ein Rocket League-ähnliches Autosoccer-Spiel entwickelt mit **Python**, **Pygam
 
 ![MotoKick2000 Menu](assets/menu_backround.png)
 
+![MotoKick2000 Gameplay](assets/screen.png)
+
 ## 🎮 Über das Spiel
 
 MotoKick2000 ist ein spannendes Autosoccer-Spiel, bei dem du mit einem Auto versuchst, einen Ball ins gegnerische Tor zu schießen. Das Spiel kombiniert realistische Fahrphysik mit strategischem Gameplay und bietet verschiedene Spielmodi.
