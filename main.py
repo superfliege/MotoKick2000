@@ -16,82 +16,7 @@ import socket
 import threading
 import random
 
-class Seagull:
-    def __init__(self, center, radius, speed, image, shadow_offset=(0, 40)):
-        self.center = pygame.Vector2(center)
-        self.radius = radius
-        self.angle = 0.0  # in Grad
-        self.speed = speed  # Grad pro Sekunde
-        self.image = image
-        self.shadow_offset = shadow_offset
-        self.last_update = time.time()
 
-    def update(self):
-        now = time.time()
-        dt = now - self.last_update
-        self.last_update = now
-        self.angle = (self.angle + self.speed * dt) % 360
-
-    def get_pos(self):
-        rad = math.radians(self.angle)
-        x = self.center.x + self.radius * math.cos(rad)
-        y = self.center.y + self.radius * math.sin(rad)
-        return pygame.Vector2(x, y)
-
-    def draw(self, surface):
-        pos = self.get_pos()
-        # Schatten zeichnen (graue Ellipse)
-        shadow_pos = (int(pos.x + self.shadow_offset[0]), int(pos.y + self.shadow_offset[1]))
-        shadow_rect = pygame.Rect(0, 0, 60, 24)
-        shadow_rect.center = shadow_pos
-        shadow_surf = pygame.Surface((60, 24), pygame.SRCALPHA)
-        pygame.draw.ellipse(shadow_surf, (0,0,0,80), (0,0,60,24))
-        surface.blit(shadow_surf, shadow_rect)
-        # Möwe drehen und zeichnen
-        rotated = pygame.transform.rotate(self.image, -self.angle)
-        rect = rotated.get_rect(center=(int(pos.x), int(pos.y)))
-        surface.blit(rotated, rect)
-
-class LavaGap:
-    def __init__(self, x, width, height, color=(255,0,0), particle_count=80):
-        self.x = x
-        self.width = width
-        self.height = height
-        self.color = color
-        self.particle_count = particle_count
-        self.particles = []
-        self.last_particle_update = time.time()
-        self.spawn_particles()
-    def spawn_particles(self):
-        self.particles = []
-        for _ in range(self.particle_count):
-            px = random.randint(self.x, self.x+self.width-1)
-            py = random.randint(0, self.height-1)
-            speed = random.uniform(0.5, 2.5)
-            size = random.randint(4, 12)
-            self.particles.append({'x': px, 'y': py, 'vy': speed, 'size': size, 'alpha': random.randint(120,200)})
-    def update(self):
-        now = time.time()
-        dt = now - self.last_particle_update
-        self.last_particle_update = now
-        for p in self.particles:
-            p['y'] += p['vy'] * dt * 60
-            p['alpha'] -= 0.5 * dt * 60
-            if p['y'] > self.height or p['alpha'] < 40:
-                p['x'] = random.randint(self.x, self.x+self.width-1)
-                p['y'] = random.randint(0, 20)
-                p['vy'] = random.uniform(0.5, 2.5)
-                p['size'] = random.randint(4, 12)
-                p['alpha'] = random.randint(120,200)
-    def draw(self, surface):
-        # Lava-Bereich
-        lava_rect = pygame.Rect(self.x, 0, self.width, self.height)
-        pygame.draw.rect(surface, self.color, lava_rect)
-        # Partikel
-        for p in self.particles:
-            s = pygame.Surface((p['size'], p['size']), pygame.SRCALPHA)
-            pygame.draw.circle(s, (0,0,0,int(p['alpha'])), (p['size']//2, p['size']//2), p['size']//2)
-            surface.blit(s, (p['x'], p['y']))
 
 class Game:
     WIDTH = 1740
@@ -137,13 +62,6 @@ class Game:
         self.tire_thread = None
         self.collision_thread = None
         self.running = False
-        self.seagull_img = pygame.image.load("assets/seagull.png").convert_alpha()
-        self.seagull = Seagull(center=(self.WIDTH//2, self.HEIGHT//2-120), radius=500, speed=30, image=self.seagull_img)
-        self.lava_gap = None
-        self.lava_active = False
-        self.lava_time = 15.0  # Sekunden bis Lava erscheint
-        self.lava_width = 100
-        self.lava_x = self.WIDTH//2 - self.lava_width//2
         self.spawnpoints = []  # Liste von Spawnpunkten für Autos
 
     def load_field(self):
@@ -478,15 +396,6 @@ class Game:
                         self.collision_thread.join(timeout=1.0)
                     return
                 self.ball.update()
-                self.seagull.update()
-                # Lava aktivieren und updaten
-                now = time.time()
-                elapsed_time = now - self.game_start_time if self.game_start_time else 0
-                if not self.lava_active and elapsed_time > self.lava_time:
-                    self.lava_gap = LavaGap(self.lava_x, self.lava_width, self.HEIGHT)
-                    self.lava_active = True
-                if self.lava_active and self.lava_gap:
-                    self.lava_gap.update()
                 try:
                     self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
                 except queue.Full:
@@ -680,33 +589,6 @@ class Game:
                             except queue.Full:
                                 pass
                 self.ball.update()
-                self.seagull.update()
-                # Lava aktivieren und updaten
-                now = time.time()
-                elapsed_time = now - self.game_start_time if self.game_start_time else 0
-                if not self.lava_active and elapsed_time > self.lava_time:
-                    self.lava_gap = LavaGap(self.lava_x, self.lava_width, self.HEIGHT)
-                    self.lava_active = True
-                if self.lava_active and self.lava_gap:
-                    self.lava_gap.update()
-                # Lava-Auto-Logik
-                if self.lava_active and self.lava_gap:
-                    for i, car in enumerate(self.cars):
-                        car_rect = car.rect
-                        jump_zone = 36  # optisch und logisch größer
-                        in_jump_left = self.lava_x-jump_zone < car_rect.right < self.lava_x and abs(car.velocity) > 3.0
-                        in_jump_right = self.lava_x+self.lava_width < car_rect.left < self.lava_x+self.lava_width+jump_zone and abs(car.velocity) > 3.0
-                        if in_jump_left or in_jump_right:
-                            if not hasattr(car, 'lava_jump_timer') or car.lava_jump_timer < now:
-                                car.lava_jump_timer = now + 0.5
-                        in_lava = self.lava_x < car_rect.centerx < self.lava_x+self.lava_width
-                        # Nur "Tod" in der Lava, wenn das Auto langsam ist (z.B. < 2.0)
-                        if in_lava and abs(car.velocity) < 2.0 and (not hasattr(car, 'lava_jump_timer') or car.lava_jump_timer < now):
-                            if i < len(self.spawnpoints):
-                                car.position.x, car.position.y, car.angle = self.spawnpoints[i]
-                                car.position.y += 80  # Respawnpunkt weiter unten
-                                car.velocity = 0
-                                car.rect.center = (int(car.position.x), int(car.position.y))
                 try:
                     self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
                 except queue.Full:
@@ -907,31 +789,6 @@ class Game:
                             except queue.Full:
                                 pass
                 self.ball.update()
-                self.seagull.update()
-                # Lava aktivieren und updaten
-                now = time.time()
-                elapsed_time = now - self.game_start_time if self.game_start_time else 0
-                if not self.lava_active and elapsed_time > self.lava_time:
-                    self.lava_gap = LavaGap(self.lava_x, self.lava_width, self.HEIGHT)
-                    self.lava_active = True
-                if self.lava_active and self.lava_gap:
-                    self.lava_gap.update()
-                # Lava-Auto-Logik
-                if self.lava_active and self.lava_gap:
-                    for i, car in enumerate(self.cars):
-                        car_rect = car.rect
-                        jump_zone = 36  # optisch und logisch größer
-                        in_jump_left = self.lava_x-jump_zone < car_rect.right < self.lava_x and abs(car.velocity) > 3.0
-                        in_jump_right = self.lava_x+self.lava_width < car_rect.left < self.lava_x+self.lava_width+jump_zone and abs(car.velocity) > 3.0
-                        if in_jump_left or in_jump_right:
-                            if not hasattr(car, 'lava_jump_timer') or car.lava_jump_timer < now:
-                                car.lava_jump_timer = now + 0.5
-                        in_lava = self.lava_x < car_rect.centerx < self.lava_x+self.lava_width
-                        if in_lava and (not hasattr(car, 'lava_jump_timer') or car.lava_jump_timer < now):
-                            if i < len(self.spawnpoints):
-                                car.position.x, car.position.y, car.angle = self.spawnpoints[i]
-                                car.velocity = 0
-                                car.rect.center = (int(car.position.x), int(car.position.y))
                 try:
                     self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
                 except queue.Full:
@@ -1007,47 +864,12 @@ class Game:
         self.screen.fill((0,0,0))
         self.screen.blit(self.field, (0, 0))
         self.banden.draw_field(self.screen, self.goals)
-        # Lava jetzt nach den weißen Linien zeichnen
-        if self.lava_active and self.lava_gap:
-            self.lava_gap.draw(self.screen)
-            # Sprungchance-Markierungen über die ganze Lava-Höhe
-            jump_zone = 36
-            jump_h = self.HEIGHT
-            jump_y = 0
-            # Links
-            jump_rect_left = pygame.Rect(self.lava_x-jump_zone, jump_y, jump_zone, jump_h)
-            pygame.draw.rect(self.screen, (255, 220, 40), jump_rect_left, border_radius=12)
-            # Rechts
-            jump_rect_right = pygame.Rect(self.lava_x+self.lava_width, jump_y, jump_zone, jump_h)
-            pygame.draw.rect(self.screen, (255, 220, 40), jump_rect_right, border_radius=12)
-        # Schatten für springende Autos über Lava (jetzt nach der Lava zeichnen)
-        now = time.time()
-        if self.lava_active and self.lava_gap:
-            for car in self.cars:
-                if hasattr(car, 'lava_jump_timer') and car.lava_jump_timer > now:
-                    car_rect = car.rect
-                    # Nur wenn Auto wirklich über der Lava ist
-                    if self.lava_x < car_rect.centerx < self.lava_x+self.lava_width:
-                        t = 1.0 - (car.lava_jump_timer-now)/0.5
-                        t = max(0.0, min(1.0, t))
-                        shadow_x = car_rect.centerx
-                        shadow_y = car_rect.centery + 18 + 10*t
-                        shadow_w = int(car_rect.width * (0.7 + 0.5*t))
-                        shadow_h = int(car_rect.height * (0.25 + 0.2*t))
-                        shadow_alpha = int(120 * (1-t) + 40)
-                        shadow_surf = pygame.Surface((shadow_w, shadow_h), pygame.SRCALPHA)
-                        pygame.draw.ellipse(shadow_surf, (0,0,0,shadow_alpha), (0,0,shadow_w,shadow_h))
-                        shadow_rect = shadow_surf.get_rect(center=(shadow_x, shadow_y))
-                        self.screen.blit(shadow_surf, shadow_rect)
         self.banden.draw(self.screen)
         self.goals.draw(self.screen)
         self.tiretracks.draw(self.screen)
         self.ball.draw(self.screen)
         for car in self.cars:
             car.draw(self.screen)
-        # Möwe zeichnen
-        if hasattr(self, 'seagull'):
-            self.seagull.draw(self.screen)
         score_text = self.font.render(f"{self.score_blue} : {self.score_red}", True, (255,255,255))
         self.screen.blit(score_text, (self.WIDTH//2-score_text.get_width()//2, int(20)))
         # Countdown-Anzeige
