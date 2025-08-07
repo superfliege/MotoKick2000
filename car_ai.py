@@ -142,9 +142,6 @@ class CarAI(Auto):
                 self.steer_left()
         if abs(angle_diff) < 60:
             self.accelerate()
-            if boost:
-                self.accelerate()
-                self.accelerate()
         else:
             self.brake()
         if abs(angle_diff) > 60:

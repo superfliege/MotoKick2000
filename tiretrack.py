@@ -14,7 +14,7 @@ class TireTrack:
 class TireTrackManager:
     def __init__(self):
         self.tracks = []
-        self.max_tracks = 120  # Mehr Spuren für realistischeres Aussehen
+        self.max_tracks = 2000  # Viel mehr Spuren, damit sie nicht vorzeitig verschwinden
         
     def add(self, pos, angle, size, track_type="gas"):
         now = time.time()
