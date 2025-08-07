@@ -14,9 +14,6 @@ from car_ai import CarAI
 import os
 import socket
 import threading
-import random
-
-
 
 class Game:
     WIDTH = 1740
@@ -62,7 +59,6 @@ class Game:
         self.tire_thread = None
         self.collision_thread = None
         self.running = False
-        self.spawnpoints = []  # Liste von Spawnpunkten für Autos
 
     def load_field(self):
         field = pygame.image.load("assets/field.png")
@@ -282,7 +278,11 @@ class Game:
             self.clock.tick(60)
 
     def show_connect_screen(self, player_count):
-        # Keine Fehlermeldung mehr anzeigen, egal wie viele Spieler
+        # Wenn mehr als 2 Spieler im Freunde-Modus gewählt werden, Fehlermeldung anzeigen
+        if player_count > 2:
+            self.show_error_screen("Spieler 3 und 4 mit Freunden sind noch nicht implementiert!")
+            return
+        # Sonst nichts tun (keine Webserver-Logik mehr)
         return
 
     def show_error_screen(self, message):
@@ -323,11 +323,11 @@ class Game:
                             sys.exit()
                         else:
                             player_count = self.menu_selected + 1
-                            # Nur bei 2, 3, 4 Spielern Modus-Auswahl
-                            if player_count == 1:
-                                return player_count, "Solo"
+                            mode = self.show_mode_menu(player_count)
+                            if mode == "Freunde":
+                                self.show_connect_screen(player_count)
+                                return player_count, mode
                             else:
-                                mode = self.show_mode_menu(player_count)
                                 return player_count, mode
             self.screen.fill((0, 0, 0))
             self.screen.blit(pygame.transform.scale(self.menu_background, (self.WIDTH, self.HEIGHT)), (0, 0))
@@ -352,113 +352,11 @@ class Game:
 
     def run(self):
         player_count, mode = self.show_menu()
-        if mode == "Solo":
-            # Nur ein Spieler, kein KI-Gegner
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-            ]
-            left_x = 120
-            center_y = self.HEIGHT//2
-            self.cars = []
-            self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-            self.cars[0].angle = 0
-            # Nach dem Erstellen der Autos:
-            self.spawnpoints = [(car.position.x, car.position.y, car.angle) for car in self.cars]
-            # --- Game-Loop wie gehabt ---
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # Reifenspuren-Logik: Nur beim Übergang Beschleunigen oder Bremsen, einmalig
-                    if prev_vel < 0.5 and abs(car.velocity) > 1.0:
-                        try:
-                            self.tire_queue.put_nowait((car, 'gas'))
-                        except queue.Full:
-                            pass
-                    elif prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "Freunde":
+        if mode == "Freunde":
             self.show_connect_screen(player_count)
-            if player_count > 4:
+            if player_count > 2:
                 return  # Nach Fehlermeldung zurück ins Menü
+            # Starte das Spiel mit 1 oder 2 Spielern (keine Webserver-Logik)
             self.running = True
             self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
             self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
@@ -469,301 +367,75 @@ class Game:
             car_imgs = [
                 pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
                 pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
             ]
             left_x = 120
             right_x = self.WIDTH-120
             center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
             self.cars = []
-            if player_count == 2:
-                # 2 Menschen + 1 KI-Gegner
+            if player_count == 1:
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
+            elif player_count == 2:
+                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
+                self.cars[0].angle = 0
                 self.cars.append(Auto(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 3:
-                # 2 Menschen + 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(Auto(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 2 Menschen + 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(Auto(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            # Nach dem Erstellen der Autos:
-            self.spawnpoints = [(car.position.x, car.position.y, car.angle) for car in self.cars]
-            # --- Game-Loop wie gehabt ---
             while True:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         pygame.quit()
                         sys.exit()
                 now = time.time()
+                # Timer-Logik
                 if self.game_start_time is None:
                     self.game_start_time = now
                 elapsed_time = now - self.game_start_time
                 remaining_time = max(0, self.game_timer - elapsed_time)
                 if remaining_time <= 0:
+                    # Spielende - zeige finalen Spielstand
                     self.show_final_score()
+                    # Threads stoppen
                     self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
+                    self.ai_queue.put(None)  # Stop-Signal
+                    self.tire_queue.put(None)  # Stop-Signal
+                    self.collision_queue.put(None) # Stop-Signal
                     if self.ai_thread:
                         self.ai_thread.join(timeout=1.0)
                     if self.tire_thread:
                         self.tire_thread.join(timeout=1.0)
                     if self.collision_thread:
                         self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[2:], start=2):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # Reifenspuren-Logik: Nur beim Übergang Beschleunigen oder Bremsen, einmalig
-                    if prev_vel < 0.5 and abs(car.velocity) > 1.0:
-                        try:
-                            self.tire_queue.put_nowait((car, 'gas'))
-                        except queue.Full:
-                            pass
-                    elif prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            # Nach dem Erstellen der Autos:
-            self.spawnpoints = [(car.position.x, car.position.y, car.angle) for car in self.cars]
-            # --- Game-Loop wie gehabt ---
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
+                    return  # Zurück zum Menü
+                # KI-Logik für alle CarAI - jetzt über Thread
                 for i, car in enumerate(self.cars[1:], start=1):
                     prev_vel_ai = car.velocity
                     if isinstance(car, CarAI):
                         teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
                         opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
+                        # Sende AI-Aufgabe an separaten Thread
                         try:
                             self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
                         except queue.Full:
-                            pass
+                            pass  # Queue voll, überspringe diesen Frame
                     else:
                         car.update()
-                    # Reifenspuren-Logik wie gehabt ...
+                    
+                    # Reifenspuren für KI/andere Autos - erweitert
                     if prev_vel_ai < 0.5 and car.velocity >= 0.5:
                         if not hasattr(self, 'car_track_timers'):
                             self.car_track_timers = {}
                         self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
+                    
+                    # Reifenspuren bei Beschleunigung (auch während der Fahrt)
+                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:  # 10% Beschleunigung
                         if not hasattr(self, 'car_accel_timers'):
                             self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
+                        self.car_accel_timers[i] = now + 0.3  # Kürzere Zeit für Beschleunigungsspuren
+                    
+                    # Zeichne Reifenspuren für verschiedene Situationen
                     if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
                         if car.velocity > 0:
+                            # Sende Reifenspuren-Aufgabe an separaten Thread
                             try:
                                 self.tire_queue.put_nowait((car, 'gas'))
                             except queue.Full:
@@ -773,16 +445,24 @@ class Game:
                                 self.tire_queue.put_nowait((car, 'brake'))
                             except queue.Full:
                                 pass
+                    
+                    # Zusätzliche Reifenspuren bei Beschleunigung
                     if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
                         if car.velocity > 0:
                             try:
                                 self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
+                            except queue.Full:
+                                pass
                 self.ball.update()
+                # Kollisionen für alle Autos - vereinfacht und performanter
+                # Die Kollisionen werden jetzt in einem separaten Thread behandelt
+                # Hier nur die Aufgaben an den Threads geben
                 try:
                     self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
                 except queue.Full:
                     pass
+                
+                # Tore prüfen (bleibt im Hauptthread)
                 y1 = self.goals.y1
                 y2 = self.goals.y2
                 if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
@@ -791,1459 +471,126 @@ class Game:
                 if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
                     self.score_blue += 1
                     self.reset_ball()
+                    
                 self.draw(remaining_time)
                 self.clock.tick(60)
+                # --- Handy-Buttonsteuerung ---
                 # Steuerung für Spieler 1 (WASD)
                 keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # Reifenspuren-Logik: Nur beim Übergang Beschleunigen oder Bremsen, einmalig
-                    if prev_vel < 0.5 and abs(car.velocity) > 1.0:
-                        try:
-                            self.tire_queue.put_nowait((car, 'gas'))
-                        except queue.Full:
-                            pass
-                    elif prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            # Nach dem Erstellen der Autos:
-            self.spawnpoints = [(car.position.x, car.position.y, car.angle) for car in self.cars]
-            # --- Game-Loop wie gehabt ---
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
+                if len(self.cars) > 0:
+                    car1 = self.cars[0]
+                    if keys[pygame.K_w]:
+                        car1.accelerate()
+                    elif keys[pygame.K_s]:
+                        car1.reverse()
                     else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # Reifenspuren-Logik: Nur beim Übergang Beschleunigen oder Bremsen, einmalig
-                    if prev_vel < 0.5 and abs(car.velocity) > 1.0:
-                        try:
-                            self.tire_queue.put_nowait((car, 'gas'))
-                        except queue.Full:
-                            pass
-                    elif prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
+                        car1.brake()
+                    if keys[pygame.K_a]:
+                        car1.steer_left()
+                    if keys[pygame.K_d]:
+                        car1.steer_right()
+                    car1.update()
+                # Steuerung für Spieler 2 (Pfeiltasten)
+                if len(self.cars) > 1:
+                    car2 = self.cars[1]
+                    if keys[pygame.K_UP]:
+                        car2.accelerate()
+                    elif keys[pygame.K_DOWN]:
+                        car2.reverse()
                     else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
-            center_y = self.HEIGHT//2
-            top_y = 220
-            bottom_y = self.HEIGHT-220
-            self.cars = []
-            if player_count == 1:
-                # Solo: Nur ein Spieler
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-            elif player_count == 2:
-                # 1 Mensch, 1 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-            elif player_count == 3:
-                # 1 Mensch, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
-                self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-            elif player_count == 4:
-                # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
-                self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
-                self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
-                self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
-                self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
-                self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
-                self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
-            while True:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        sys.exit()
-                now = time.time()
-                if self.game_start_time is None:
-                    self.game_start_time = now
-                elapsed_time = now - self.game_start_time
-                remaining_time = max(0, self.game_timer - elapsed_time)
-                if remaining_time <= 0:
-                    self.show_final_score()
-                    self.running = False
-                    self.ai_queue.put(None)
-                    self.tire_queue.put(None)
-                    self.collision_queue.put(None)
-                    if self.ai_thread:
-                        self.ai_thread.join(timeout=1.0)
-                    if self.tire_thread:
-                        self.tire_thread.join(timeout=1.0)
-                    if self.collision_thread:
-                        self.collision_thread.join(timeout=1.0)
-                    return
-                # KI-Logik für CarAI (wie gehabt)
-                for i, car in enumerate(self.cars[1:], start=1):
-                    prev_vel_ai = car.velocity
-                    if isinstance(car, CarAI):
-                        teammates = [c for c in self.cars if c is not car and getattr(c, 'team', None) == car.team]
-                        opponents = [c for c in self.cars if c is not car and getattr(c, 'team', None) != car.team]
-                        try:
-                            self.ai_queue.put_nowait((car, self.ball, self.goals, teammates, opponents))
-                        except queue.Full:
-                            pass
-                    else:
-                        car.update()
-                    # Reifenspuren-Logik wie gehabt ...
-                    if prev_vel_ai < 0.5 and car.velocity >= 0.5:
-                        if not hasattr(self, 'car_track_timers'):
-                            self.car_track_timers = {}
-                        self.car_track_timers[i] = now + TRACK_MARK_TIME
-                    if car.velocity > 0.5 and car.velocity > prev_vel_ai * 1.1:
-                        if not hasattr(self, 'car_accel_timers'):
-                            self.car_accel_timers = {}
-                        self.car_accel_timers[i] = now + 0.3
-                    if hasattr(self, 'car_track_timers') and i in self.car_track_timers and self.car_track_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'gas'))
-                            except queue.Full:
-                                pass
-                        elif car.velocity < 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'brake'))
-                            except queue.Full:
-                                pass
-                    if hasattr(self, 'car_accel_timers') and i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        if car.velocity > 0:
-                            try:
-                                self.tire_queue.put_nowait((car, 'accel'))
-                            except queue.Full:                                pass
-                self.ball.update()
-                try:
-                    self.collision_queue.put_nowait((self.cars, self.ball, self.goals))
-                except queue.Full:
-                    pass
-                y1 = self.goals.y1
-                y2 = self.goals.y2
-                if (self.ball.rect.left <= 0 and y1 < self.ball.rect.centery < y2):
-                    self.score_red += 1
-                    self.reset_ball()
-                if (self.ball.rect.right >= self.WIDTH and y1 < self.ball.rect.centery < y2):
-                    self.score_blue += 1
-                    self.reset_ball()
-                self.draw(remaining_time)
-                self.clock.tick(60)
-                # Steuerung für Spieler 1 (WASD)
-                keys = pygame.key.get_pressed()
-                now = time.time()
-                if not hasattr(self, 'car_prev_vels'):
-                    self.car_prev_vels = {}
-                if not hasattr(self, 'car_accel_timers'):
-                    self.car_accel_timers = {}
-                if not hasattr(self, 'car_brake_timers'):
-                    self.car_brake_timers = {}
-                # Für alle Autos (egal ob Mensch oder KI)
-                for i, car in enumerate(self.cars):
-                    prev_vel = self.car_prev_vels.get(i, 0)
-                    # Steuerung für Menschen
-                    if i == 0:
-                        if keys[pygame.K_w]:
-                            car.accelerate()
-                        elif keys[pygame.K_s]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_a]:
-                            car.steer_left()
-                        if keys[pygame.K_d]:
-                            car.steer_right()
-                    elif i == 1:
-                        if keys[pygame.K_UP]:
-                            car.accelerate()
-                        elif keys[pygame.K_DOWN]:
-                            car.reverse()
-                        else:
-                            car.brake()
-                        if keys[pygame.K_LEFT]:
-                            car.steer_left()
-                        if keys[pygame.K_RIGHT]:
-                            car.steer_right()
-                    # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
-                    car.update()
-                    # --- Reifenspuren-Logik ---
-                    # Beschleunigen aus dem Stand: Timer für 0.5 Sekunden, Spurtyp 'accel'
-                    if prev_vel < 0.5 and abs(car.velocity) > 0.5:
-                        self.car_accel_timers[i] = now + 0.5
-                    # Bremsen: Timer für 0.5 Sekunden, Spurtyp 'brake'
-                    if prev_vel > 1.0 and abs(car.velocity) < 0.5:
-                        self.car_brake_timers[i] = now + 0.5
-                    # Solange Timer läuft, Reifenspuren zeichnen
-                    if i in self.car_accel_timers and self.car_accel_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'accel'))
-                        except queue.Full:
-                            pass
-                    if i in self.car_brake_timers and self.car_brake_timers[i] > now:
-                        try:
-                            self.tire_queue.put_nowait((car, 'brake'))
-                        except queue.Full:
-                            pass
-                    self.car_prev_vels[i] = abs(car.velocity)
-        elif mode == "KI":
-            self.running = True
-            self.ai_thread = threading.Thread(target=self.ai_thread_worker, daemon=True)
-            self.tire_thread = threading.Thread(target=self.tire_thread_worker, daemon=True)
-            self.collision_thread = threading.Thread(target=self.collision_thread_worker, daemon=True)
-            self.ai_thread.start()
-            self.tire_thread.start()
-            self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
-            left_x = 120
-            right_x = self.WIDTH-120
+                        car2.brake()
+                    if keys[pygame.K_LEFT]:
+                        car2.steer_left()
+                    if keys[pygame.K_RIGHT]:
+                        car2.steer_right()
+                    car2.update()
+        # Tastatursteuerung für Autos ist im Freunde-Modus deaktiviert, nur Menü
+        # ... existing code ...
+
+    def draw(self, remaining_time):
+        self.screen.fill((0,0,0))
+        self.screen.blit(self.field, (0, 0))
+        self.banden.draw_field(self.screen, self.goals)
+        self.banden.draw(self.screen)
+        self.goals.draw(self.screen)
+        self.tiretracks.draw(self.screen)
+        self.ball.draw(self.screen)
+        for car in self.cars:
+            car.draw(self.screen)
+        score_text = self.font.render(f"{self.score_blue} : {self.score_red}", True, (255,255,255))
+        self.screen.blit(score_text, (self.WIDTH//2-score_text.get_width()//2, int(20)))
+        # Countdown-Anzeige
+        if remaining_time > 10:
+            minutes = int(remaining_time) // 60
+            seconds = int(remaining_time) % 60
+            countdown_text = self.font.render(f"{minutes:02d}:{seconds:02d}", True, (255, 255, 255))
+            countdown_rect = countdown_text.get_rect(topright=(self.WIDTH - 20, 20))
+            self.screen.blit(countdown_text, countdown_rect)
+        else:
+            # Großer, halbtransparenter, roter Timer mittig oben
+            big_font = pygame.font.SysFont("Arial", 120, bold=True)
+            seconds = int(remaining_time)
+            big_timer_text = big_font.render(f"{seconds}", True, (255, 0, 0))
+            # Transparenter Hintergrundbalken
+            overlay = pygame.Surface((self.WIDTH, 160), pygame.SRCALPHA)
+            overlay.fill((255, 0, 0, 80))  # Rot, halbtransparent
+            self.screen.blit(overlay, (0, 0))
+            timer_rect = big_timer_text.get_rect(midtop=(self.WIDTH//2, 10))
+            self.screen.blit(big_timer_text, timer_rect)
+        pygame.display.flip()
+
+    def show_final_score(self):
+        """Zeige finalen Spielstand an und warte auf Tastendruck"""
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    return  # Zurück zum Menü
+            
+            # Hintergrund zeichnen
+            self.screen.blit(pygame.transform.scale(self.menu_background, (self.WIDTH, self.HEIGHT)), (0, 0))
+            
+            # Schwarzer Hintergrundbalken
+            menu_bar_height = 120
+            menu_bar_rect = pygame.Rect(0, self.HEIGHT//2 - menu_bar_height//2, self.WIDTH, menu_bar_height)
+            pygame.draw.rect(self.screen, (0, 0, 0), menu_bar_rect)
+            
+            # Finaler Spielstand
+            final_text = self.menu_font.render("SPIELENDE!", True, (255, 255, 0))
+            score_text = self.menu_font.render(f"Finaler Spielstand: {self.score_blue} : {self.score_red}", True, (255, 255, 255))
+            press_text = self.menu_font.render("Drücke eine Taste", True, (200, 200, 200))
+            
+            # Texte zentrieren
+            final_rect = final_text.get_rect(center=(self.WIDTH//2, self.HEIGHT//2 - 40))
+            score_rect = score_text.get_rect(center=(self.WIDTH//2, self.HEIGHT//2))
+            press_rect = press_text.get_rect(center=(self.WIDTH//2, self.HEIGHT//2 + 40))
+            
+            self.screen.blit(final_text, final_rect)
+            self.screen.blit(score_text, score_rect)
+            self.screen.blit(press_text, press_rect)
+            
+            pygame.display.flip()
+            self.clock.tick(60)
+
+def closest_point_on_rotated_rect(ball_center, car):
+    # Transformiere Ball in lokale Koordinaten des Autos
+    angle_rad = math.radians(car.angle)
+    cos_a = math.cos(-angle_rad)
+    sin_a = math.sin(-angle_rad)
+    rel = pygame.Vector2(ball_center) - car.position
+    local_x = rel.x * cos_a - rel.y * sin_a
+    local_y = rel.x * sin_a + rel.y * cos_a
+    # Clampe auf Rechteck
+    half_w = car.rect.width / 2
+    half_h = car.rect.height / 2
+    clamped_x = max(-half_w, min(half_w, local_x))
+    clamped_y = max(-half_h, min(half_h, local_y))
+    # Transformiere zurück in Weltkoordinaten
+    world_x = clamped_x * cos_a + clamped_y * sin_a + car.position.x
+    world_y = -clamped_x * sin_a + clamped_y * cos_a + car.position.y
+    return pygame.Vector2(world_x, world_y)
+
+if __name__ == "__main__":
+    Game().run() 
