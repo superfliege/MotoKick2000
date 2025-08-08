@@ -11,6 +11,9 @@ class Auto:
         self.angle = 0.0  # Grad
         self.scale_factor = scale_factor
         self.bounds = bounds
+        # Rotation cache (quantized to integer degrees)
+        self._rot_cache = {}
+        self._last_angle_rendered = None
         # Arcade-Parameter
         self.acceleration = 0.5
         self.max_speed = 5.0
@@ -19,21 +22,39 @@ class Auto:
         # Drift
         self.drifting = False
         self.drift_turn_speed = self.turn_speed * 2.0
-        self.drift_friction = 0.995
-        self.drift_vector = pygame.Vector2(math.cos(math.radians(self.angle)), math.sin(math.radians(self.angle)))
+        self.drift_friction = 0.992
+        self.drift_vector = pygame.Vector2(
+            math.cos(math.radians(self.angle)),
+            math.sin(math.radians(self.angle))
+        )
         self.drift_lerp = 0.15  # Wie schnell drift_vector Richtung angle annimmt
+
+    def _get_rotated_image(self):
+        # Quantize angle to nearest integer degree for caching
+        quant_angle = int(round(self.angle)) % 360
+        if quant_angle == self._last_angle_rendered and self.image is not None:
+            return self.image
+        img = self._rot_cache.get(quant_angle)
+        if img is None:
+            img = pygame.transform.rotate(self.original_image, -quant_angle)
+            # Keep alpha format optimal for blitting
+            if img.get_alpha() is not None:
+                img = img.convert_alpha()
+            else:
+                img = img.convert()
+            self._rot_cache[quant_angle] = img
+        self._last_angle_rendered = quant_angle
+        return img
 
     def update(self):
         # Drift-Logik
         if self.drifting:
-            turn_speed = self.drift_turn_speed
             friction = self.drift_friction
             # Drift-Vektor langsam an neue Richtung anpassen
             direction = pygame.Vector2(math.cos(math.radians(self.angle)), math.sin(math.radians(self.angle)))
             self.drift_vector = self.drift_vector.lerp(direction, self.drift_lerp)
             move_vec = self.drift_vector * self.velocity
         else:
-            turn_speed = self.turn_speed
             friction = self.friction
             direction = pygame.Vector2(math.cos(math.radians(self.angle)), math.sin(math.radians(self.angle)))
             self.drift_vector = direction
@@ -47,8 +68,8 @@ class Auto:
         self.rect.center = (int(self.position.x), int(self.position.y))
         # Geschwindigkeit/Reibung
         self.velocity *= friction
-        # Bildwinkel
-        self.image = pygame.transform.rotate(self.original_image, -self.angle)
+        # Bildwinkel aus Cache
+        self.image = self._get_rotated_image()
         # Drift-Reset
         self.drifting = False
 
@@ -82,8 +103,10 @@ class Auto:
             self.angle %= 360
 
     def drift(self):
-        self.drifting = True
+        # Drift nur bei ausreichender Geschwindigkeit aktivieren
+        if abs(self.velocity) > 1.0:
+            self.drifting = True
 
     def draw(self, surface):
         rotated_rect = self.image.get_rect(center=self.rect.center)
-        surface.blit(self.image, rotated_rect) 
+        surface.blit(self.image, rotated_rect)

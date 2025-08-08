@@ -23,7 +23,8 @@ class Game:
     HEIGHT = 980
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT))
+        flags = pygame.HWSURFACE | pygame.DOUBLEBUF
+        self.screen = pygame.display.set_mode((self.WIDTH, self.HEIGHT), flags)
         pygame.display.set_caption("MotoKick2000")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Arial", 48)
@@ -37,18 +38,19 @@ class Game:
         self.banden = Banden(self.WIDTH, self.HEIGHT, BANDEN_BREITE)
         self.goals = GoalPosts(self.WIDTH, self.HEIGHT, 10, 130)
         self.ball = Ball(self.WIDTH//2, self.HEIGHT//2, self.WIDTH, self.HEIGHT)
-        car_blue_img = pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height()))
-        car_red_img = pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height()))
-        self.car_blue = Auto(car_blue_img, 80, self.HEIGHT//2, 2.0, (self.WIDTH, self.HEIGHT))
-        self.car_red = Auto(car_red_img, self.WIDTH-80, self.HEIGHT//2, 2.0, (self.WIDTH, self.HEIGHT))
-        self.car_red.angle = 180
+        # Assets vorladen (konvertiert) und 4x skalieren (Autos doppelt so groß wie bisher 2x)
+        self.CAR_SCALE_MULT = 4.0
+        self.img_red = self._load_and_scale("assets/car_red.png", self.CAR_SCALE_MULT)
+        self.img_blue = self._load_and_scale("assets/car_blue.png", self.CAR_SCALE_MULT)
+        self.img_yellow = self._load_and_scale("assets/car_yellow.png", self.CAR_SCALE_MULT)
+        self.img_pink = self._load_and_scale("assets/car_pink.png", self.CAR_SCALE_MULT)
         self.score_blue = 0
         self.score_red = 0
         self.car_blue_last_action = None
         self.car_red_last_action = None
         self.car_blue_track_timer = 0
         self.car_red_track_timer = 0
-        self.menu_background = pygame.image.load("assets/menu_backround.png")
+        self.menu_background = pygame.image.load("assets/menu_backround.png").convert()
         self.menu_items = ["Spieler 1", "Spieler 2", "Spieler 3", "Spieler 4", "Beenden"]
         self.menu_selected = 0
         self.game_timer = 120  # 2 Minuten in Sekunden
@@ -64,8 +66,14 @@ class Game:
         self.running = False
         self.spawnpoints = []  # Liste von Spawnpunkten für Autos
 
+    def _load_and_scale(self, path, scale):
+        surf = pygame.image.load(path).convert_alpha()
+        w, h = surf.get_size()
+        new_size = (int(w*scale), int(h*scale))
+        return pygame.transform.smoothscale(surf, new_size)
+
     def load_field(self):
-        field = pygame.image.load("assets/field.png")
+        field = pygame.image.load("assets/field.png").convert()
         return field
 
     def ai_thread_worker(self):
@@ -361,9 +369,7 @@ class Game:
             self.ai_thread.start()
             self.tire_thread.start()
             self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-            ]
+            car_imgs = [self.img_red]
             left_x = 120
             center_y = self.HEIGHT//2
             self.cars = []
@@ -424,23 +430,24 @@ class Game:
                             car.accelerate()
                         elif keys[pygame.K_s]:
                             car.reverse()
-                        else:
-                            car.brake()
                         if keys[pygame.K_a]:
                             car.steer_left()
                         if keys[pygame.K_d]:
                             car.steer_right()
+                        # Drift (NumPad 0, Shift oder Space), nur bei Geschwindigkeit
+                        if (keys[pygame.K_KP0] or keys[pygame.K_LSHIFT] or keys[pygame.K_SPACE]) and abs(car.velocity) > 1.0:
+                            car.drift()
                     elif i == 1:
                         if keys[pygame.K_UP]:
                             car.accelerate()
                         elif keys[pygame.K_DOWN]:
                             car.reverse()
-                        else:
-                            car.brake()
                         if keys[pygame.K_LEFT]:
                             car.steer_left()
                         if keys[pygame.K_RIGHT]:
                             car.steer_right()
+                        if (keys[pygame.K_KP0] or keys[pygame.K_RSHIFT] or keys[pygame.K_RCTRL]) and abs(car.velocity) > 1.0:
+                            car.drift()
                     # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
                     car.update()
                     # Reifenspuren-Logik: Nur beim Übergang Beschleunigen oder Bremsen, einmalig
@@ -466,12 +473,7 @@ class Game:
             self.ai_thread.start()
             self.tire_thread.start()
             self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
+            car_imgs = [self.img_red, self.img_blue, self.img_yellow, self.img_pink]
             left_x = 120
             right_x = self.WIDTH-120
             center_y = self.HEIGHT//2
@@ -482,48 +484,28 @@ class Game:
                 # 2 Menschen + 1 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(Auto(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
                 self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
             elif player_count == 3:
                 # 2 Menschen + 1 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(Auto(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
                 self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
             elif player_count == 4:
                 # 2 Menschen + 2 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(Auto(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
                 self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
                 self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
             # Nach dem Erstellen der Autos:
             self.spawnpoints = [(car.position.x, car.position.y, car.angle) for car in self.cars]
             # --- Game-Loop wie gehabt ---
@@ -621,23 +603,23 @@ class Game:
                             car.accelerate()
                         elif keys[pygame.K_s]:
                             car.reverse()
-                        else:
-                            car.brake()
                         if keys[pygame.K_a]:
                             car.steer_left()
                         if keys[pygame.K_d]:
                             car.steer_right()
+                        if (keys[pygame.K_KP0] or keys[pygame.K_LSHIFT] or keys[pygame.K_SPACE]) and abs(car.velocity) > 1.0:
+                            car.drift()
                     elif i == 1:
                         if keys[pygame.K_UP]:
                             car.accelerate()
                         elif keys[pygame.K_DOWN]:
                             car.reverse()
-                        else:
-                            car.brake()
                         if keys[pygame.K_LEFT]:
                             car.steer_left()
                         if keys[pygame.K_RIGHT]:
                             car.steer_right()
+                        if (keys[pygame.K_KP0] or keys[pygame.K_RSHIFT] or keys[pygame.K_RCTRL]) and abs(car.velocity) > 1.0:
+                            car.drift()
                     # KI-Autos werden wie gehabt durch update_ai gesteuert (bereits im Thread)
                     car.update()
                     # --- Reifenspuren-Logik ---
@@ -667,12 +649,7 @@ class Game:
             self.ai_thread.start()
             self.tire_thread.start()
             self.collision_thread.start()
-            car_imgs = [
-                pygame.transform.scale(pygame.image.load("assets/car_red.png"), (2*pygame.image.load("assets/car_red.png").get_width(), 2*pygame.image.load("assets/car_red.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_blue.png"), (2*pygame.image.load("assets/car_blue.png").get_width(), 2*pygame.image.load("assets/car_blue.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_yellow.png"), (2*pygame.image.load("assets/car_yellow.png").get_width(), 2*pygame.image.load("assets/car_yellow.png").get_height())),
-                pygame.transform.scale(pygame.image.load("assets/car_pink.png"), (2*pygame.image.load("assets/car_pink.png").get_width(), 2*pygame.image.load("assets/car_pink.png").get_height())),
-            ]
+            car_imgs = [self.img_red, self.img_blue, self.img_yellow, self.img_pink]
             left_x = 120
             right_x = self.WIDTH-120
             center_y = self.HEIGHT//2
@@ -683,50 +660,34 @@ class Game:
                 # Solo: Nur ein Spieler
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
+                # Gleiche Geschwindigkeit für alle Autos (Standardeinstellungen aus Auto werden verwendet)
             elif player_count == 2:
                 # 1 Mensch, 1 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[1], right_x, center_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
                 self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
+                # Gleiche Geschwindigkeit für alle Autos (Standardeinstellungen aus Auto werden verwendet)
             elif player_count == 3:
                 # 1 Mensch, 2 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, center_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[1], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='right'))
                 self.cars[1].angle = 180
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[2], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
                 self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
+                # Gleiche Geschwindigkeit für alle Autos (Standardeinstellungen aus Auto werden verwendet)
             elif player_count == 4:
                 # 1 Mensch, 1 KI-Mitspieler, 2 KI-Gegner
                 self.cars.append(Auto(car_imgs[0], left_x, top_y, 2.0, (self.WIDTH, self.HEIGHT)))
                 self.cars[0].angle = 0
-                self.cars[0].max_speed = 5.0
-                self.cars[0].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[1], left_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='blue', side='left'))
                 self.cars[1].angle = 0
-                self.cars[1].max_speed = 5.0
-                self.cars[1].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[2], right_x, top_y, 2.0, (self.WIDTH, self.HEIGHT), team='yellow', side='right'))
                 self.cars[2].angle = 180
-                self.cars[2].max_speed = 5.0
-                self.cars[2].acceleration = 0.5
                 self.cars.append(CarAI(car_imgs[3], right_x, bottom_y, 2.0, (self.WIDTH, self.HEIGHT), team='pink', side='right'))
                 self.cars[3].angle = 180
-                self.cars[3].max_speed = 5.0
-                self.cars[3].acceleration = 0.5
+                # Gleiche Geschwindigkeit für alle Autos (Standardeinstellungen aus Auto werden verwendet)
             while True:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:

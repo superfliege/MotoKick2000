@@ -25,9 +25,11 @@ class CarAI(Auto):
         else:
             own_goal = pygame.Vector2(goals.right1)
             target_goal = pygame.Vector2(goals.left1)
+
         ball_vec = pygame.Vector2(ball.pos)
         car_vec = self.position
         shot_dir = (target_goal - ball_vec).normalize()
+
         # --- S-förmiger Offset: alle 1.0s neu wählen, Vorzeichen wechselt ab, Amplitude bis 80px ---
         now = time.time()
         if not hasattr(self, 'offset_sign'):
@@ -36,6 +38,7 @@ class CarAI(Auto):
             self.random_offset = self.offset_sign * random.uniform(40, 80)
             self.offset_sign *= -1
             self.last_offset_update = now
+
         ortho = pygame.Vector2(-shot_dir.y, shot_dir.x)
         behind_ball = ball_vec - shot_dir * 80 + ortho * self.random_offset
         far_behind_ball = ball_vec - shot_dir * 200 + ortho * self.random_offset
@@ -50,18 +53,16 @@ class CarAI(Auto):
             if dist_moved < stuck_distance and abs(self.velocity) < stuck_velocity:
                 stuck = True
 
-        # Unstuck-Phase: gezielt zur Seite fahren
+        # Unstuck-Phase: gezielt zur Seite fahren (keine Physik-Updates hier)
         if now < self.unstuck_until:
             ortho_unstuck = pygame.Vector2(-shot_dir.y, shot_dir.x) * self.unstuck_dir
             unstuck_target = car_vec + ortho_unstuck * 60
             self._drive_to(unstuck_target)
-            super().update()
             self._update_activity()
             return
 
         # Kollisionsvermeidung: Abstand zu anderen Autos prüfen
         min_dist = 10
-        collision = False
         for other in teammates + opponents:
             if other is self:
                 continue
@@ -71,7 +72,6 @@ class CarAI(Auto):
                 oid = id(other)
                 # Enger Kontakt
                 if dist < min_dist:
-                    collision = True
                     if oid not in self.collision_timer or self.collision_timer[oid]['end'] is not None:
                         self.collision_timer[oid] = {'start': now, 'end': None}
                     # Prüfe, ob stuck: stuck + collision + velocity
@@ -79,10 +79,7 @@ class CarAI(Auto):
                         rel_vec = other_vec - car_vec
                         forward = pygame.Vector2(math.cos(math.radians(self.angle)), math.sin(math.radians(self.angle)))
                         cross = forward.x * rel_vec.y - forward.y * rel_vec.x
-                        if cross > 0:
-                            self.unstuck_dir = -1  # links
-                        else:
-                            self.unstuck_dir = 1   # rechts
+                        self.unstuck_dir = -1 if cross > 0 else 1
                         self.unstuck_until = now + 5.0
                         self.collision_timer[oid]['start'] = now
                 else:
@@ -96,7 +93,6 @@ class CarAI(Auto):
         if (ball_vec - own_goal).length() < 220:
             defend_point = ball_vec + (ball_vec - own_goal).normalize() * 60
             self._drive_to(defend_point)
-            super().update()
             self._update_activity()
             return
 
@@ -106,24 +102,25 @@ class CarAI(Auto):
         dist_car_ball = (car_vec - ball_vec).length()
 
         # Fallback: Wenn Velocity zu lange zu klein, fahre weit hinter den Ball
-        if abs(self.velocity) < 0.1:
-            if time.time() - self.last_active_time > 2.0:
-                self._drive_to(far_behind_ball)
-                super().update()
-                return
+        if abs(self.velocity) < 0.1 and time.time() - self.last_active_time > 2.0:
+            self._drive_to(far_behind_ball)
+            return
         else:
             self._update_activity()
 
-        # Wenn Ball hinter der KI: weiter hinter den Ball fahren (Bogen)
+        # Taktik wählen
         if alignment < 0:
+            # Ball ist ungünstig, fahre weit hinter den Ball
             self._drive_to(far_behind_ball)
-        # Wenn gut ausgerichtet und nah am Ball: Schuss!
         elif alignment > 0.85 and dist_car_ball < 120:
+            # Schuss vorbereiten
             shot_point = ball_vec + shot_dir * 40
             self._drive_to(shot_point, boost=True)
         else:
+            # Positioniere dich hinter dem Ball
             self._drive_to(behind_ball)
-        super().update()
+
+        # Wichtig: KEINE super().update() hier aufrufen. Bewegung erfolgt im Hauptthread.
 
     def _drive_to(self, target, boost=False):
         car_vec = self.position
